@@ -1,0 +1,662 @@
+from pathlib import Path
+import re
+import uuid
+import random
+
+import requests
+import urllib3
+
+ENABLED = True
+EMOJI = "🏮"
+AVAILABLE_FUNCTIONS = ["lantern"]
+
+TOOLS = [
+    {
+        "type": "function",
+        "is_local": True,
+        "function": {
+            "name": "lantern",
+            "description": "Provide guided support for reflection, clarity, calm, and next steps.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "One of: start, continue, user_message, end"
+                    },
+                    "persona_1": {
+                        "type": "string",
+                        "description": "Support mode"
+                    },
+                    "persona_2": {
+                        "type": "string",
+                        "description": "Support style"
+                    },
+                    "scene": {
+                        "type": "string",
+                        "description": "What is on the user's mind"
+                    },
+                    "user_message": {
+                        "type": "string",
+                        "description": "Optional message from the user"
+                    },
+                    "messages_per_batch": {
+                        "type": "integer",
+                        "description": "Used as a rough pace/depth signal"
+                    },
+                    "clear": {
+                        "type": "boolean",
+                        "description": "If true, hard-clear without a takeaway"
+                    }
+                },
+                "required": ["action"]
+            }
+        }
+    }
+]
+
+SETTINGS = {
+    "RENDEZVOUS_DEFAULT_BATCH": 4,
+    "RENDEZVOUS_MAX_BATCH": 8,
+    "RENDEZVOUS_USER_NAME": "You"
+}
+
+SETTINGS_HELP = {
+    "RENDEZVOUS_DEFAULT_BATCH": "Default pace/depth value for Lantern.",
+    "RENDEZVOUS_MAX_BATCH": "Maximum pace/depth value for Lantern.",
+    "RENDEZVOUS_USER_NAME": "Label shown when the user speaks in the session."
+}
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+BASE_URL = "https://127.0.0.1:8073"
+
+STATE = {
+    "active": False,
+    "persona_1": "",   # support mode
+    "persona_2": "",   # support style
+    "scene": "",
+    "messages_per_batch": 4,
+    "transcript": [],
+    "next_speaker": "Lantern",
+    "turn_count": 0,
+    "chat_1": "",
+    "chat_2": ""
+}
+
+
+def _clean_text(value):
+    return str(value or "").strip()
+
+
+def _to_int(value, default):
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _slug(value):
+    s = re.sub(r"[^a-zA-Z0-9_-]+", "-", _clean_text(value)).strip("-").lower()
+    return s or "chat"
+
+
+def _read_api_key():
+    candidates = [
+        Path("/home/sapphire/.config/sapphire/secret_key"),
+        Path.home() / ".config" / "sapphire" / "secret_key",
+        Path.home() / "Library" / "Application Support" / "Sapphire" / "secret_key",
+    ]
+    for path in candidates:
+        if path.exists():
+            text = path.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+    raise RuntimeError("Could not find Sapphire secret_key")
+
+
+def _api(method, path, payload=None):
+    headers = {"X-API-Key": _read_api_key()}
+    url = f"{BASE_URL}{path}"
+
+    resp = requests.request(
+        method=method,
+        url=url,
+        headers=headers,
+        json=payload,
+        timeout=180,
+        verify=False,
+    )
+
+    if resp.status_code >= 400:
+        raise RuntimeError(f"{method} {path} failed: {resp.status_code} {resp.text[:400]}")
+
+    content_type = (resp.headers.get("content-type") or "").lower()
+    if "application/json" in content_type:
+        return resp.json()
+
+    text = resp.text.strip()
+    try:
+        return resp.json()
+    except Exception:
+        return text
+
+
+def _extract_reply_text(payload):
+    if isinstance(payload, str):
+        return payload.strip()
+
+    if isinstance(payload, dict):
+        for key in ("response", "assistant", "text", "message", "content", "reply", "output"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        choices = payload.get("choices")
+        if isinstance(choices, list) and choices:
+            first = choices[0]
+            if isinstance(first, dict):
+                msg = first.get("message")
+                if isinstance(msg, dict):
+                    content = msg.get("content")
+                    if isinstance(content, str) and content.strip():
+                        return content.strip()
+
+    return ""
+
+
+def _strip_speaker_prefix(text, speaker="Lantern"):
+    text = (text or "").strip()
+    patterns = [
+        rf"^{re.escape(speaker)}\s*:\s*",
+        r"^[A-Za-z0-9 _-]+\s*:\s*"
+    ]
+    for pattern in patterns:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
+    return text.strip().strip('"').strip()
+
+
+def _create_chat(name):
+    attempts = [
+        {"name": name},
+        {"chat_name": name},
+        {"title": name},
+    ]
+
+    last_error = None
+    for body in attempts:
+        try:
+            return _api("POST", "/api/chats", body)
+        except Exception as e:
+            last_error = e
+
+    raise RuntimeError(f"Could not create chat '{name}': {last_error}")
+
+
+def _delete_chat(name):
+    try:
+        _api("DELETE", f"/api/chats/{name}")
+    except Exception:
+        pass
+
+
+def _chat_once(prompt, chat_name):
+    attempts = [
+        {"text": prompt, "chat_name": chat_name},
+        {"message": prompt, "chat_name": chat_name},
+        {"input": prompt, "chat_name": chat_name},
+    ]
+
+    last_error = None
+    for body in attempts:
+        try:
+            result = _api("POST", "/api/chat", body)
+            text = _extract_reply_text(result)
+            if text:
+                return text
+        except Exception as e:
+            last_error = e
+
+    raise RuntimeError(f"/api/chat did not return usable text: {last_error}")
+
+
+def _mode_label(value):
+    mapping = {
+        "be_heard": "Be heard",
+        "get_clear": "Get clear",
+        "calm_down": "Calm down",
+        "prepare": "Prepare",
+        "reflect": "Reflect",
+        "spiritual": "Spiritual",
+    }
+    return mapping.get(value, value or "Be heard")
+
+
+def _style_label(value):
+    mapping = {
+        "gentle": "Gentle",
+        "practical": "Practical",
+        "direct": "Direct",
+        "deep": "Deep",
+        "spiritual": "Spiritual",
+    }
+    return mapping.get(value, value or "Gentle")
+
+
+def _pace_label(value):
+    n = _to_int(value, 4)
+    if n <= 2:
+        return "slow and gentle"
+    if n <= 4:
+        return "steady and balanced"
+    if n <= 6:
+        return "focused and a little deeper"
+    return "deep and patient"
+
+
+def _mode_instructions(mode):
+    return {
+        "be_heard": "Prioritize feeling heard, reflected, and emotionally understood. Do not rush into fixing.",
+        "get_clear": "Help separate facts, feelings, fears, needs, and options. Bring clarity and structure.",
+        "calm_down": "Help the user settle their body and narrow the moment. Use grounding and steadying language.",
+        "prepare": "Help the user get ready for a hard conversation or decision. Offer wording and structure.",
+        "reflect": "Use reflective questions, light journaling energy, and pattern noticing.",
+        "spiritual": "Use meaning-centered, gentle, reverent reflection when appropriate. Do not preach.",
+    }.get(mode, "Be supportive, calm, and useful.")
+
+
+def _style_instructions(style):
+    return {
+        "gentle": "Be warm, validating, patient, and plainspoken. Use simple language.",
+        "practical": "Be grounded, organized, and action-friendly. Keep it concrete.",
+        "direct": "Be kind, concise, and straightforward. No fluff. No harshness.",
+        "deep": "Be reflective, but concrete and readable. No vague poetry.",
+        "spiritual": "Be calm, reverent, and hopeful, but plainspoken. Do not preach. Use spiritual language lightly.",
+    }.get(style, "Be warm and grounded.")
+
+
+def _opening_line(mode, scene=""):
+    scene = _clean_text(scene)
+    scene_hint = ""
+    if scene and scene.lower() not in {
+        "i don’t know what i need. i just need a little help figuring it out.",
+        "i don't know what i need. i just need a little help figuring it out."
+    }:
+        scene_hint = f" You mentioned: {scene}"
+
+    options = {
+        "be_heard": [
+            "I'm here. Start wherever you can.",
+            "Take your time. What feels most pressing right now?",
+            "You don't have to explain it perfectly. What feels hardest to carry right now?",
+            "We can keep this simple. What's weighing on you most?"
+        ],
+        "get_clear": [
+            "Let's sort it out one piece at a time. What's the knot?",
+            "We can untangle this together. What feels most confusing right now?",
+            "Let's make it clearer, not bigger. Where do you want to start?",
+            "What's the part that feels most tangled right now?"
+        ],
+        "calm_down": [
+            "Let's slow this down first. What's happening in your body right now?",
+            "Before we solve anything, let's get steadier. What are you noticing right now?",
+            "Let's make this moment smaller first. What's the first thing you notice?",
+            "No rush. Let's get your footing first. What feels loudest right now?"
+        ],
+        "prepare": [
+            "We can get you ready for this. What's the conversation or decision?",
+            "Let's prepare this step by step. Who or what are you dealing with?",
+            "We can make this more manageable. What's the situation you're preparing for?",
+            "Let's work out what to say and how to say it. What's coming up?"
+        ],
+        "reflect": [
+            "Let's look at it honestly and keep it simple. What's been coming up for you?",
+            "We can slow it down and notice the pattern. What's on your mind?",
+            "What's the thing you keep circling back to?",
+            "Let's start with what feels most real right now."
+        ],
+        "spiritual": [
+            "We can hold this with care. What feels unresolved right now?",
+            "Let's approach this quietly and honestly. What's weighing on your spirit?",
+            "We can stay gentle with this. What feels tender or unfinished?",
+            "What part of this feels deepest to you right now?"
+        ],
+    }
+
+    line = random.choice(options.get(mode, [
+        "I'm here with you. What feels hardest right now?",
+        "We can take this one step at a time. Where do you want to begin?"
+    ]))
+
+    return line + scene_hint
+
+
+def _visible_transcript_items():
+    visible = []
+
+    for msg in STATE["transcript"]:
+        speaker = str(msg.get("speaker", "")).strip().lower()
+        text = str(msg.get("text", "")).strip()
+        text_lower = text.lower()
+
+        if (
+            "thought" in speaker
+            or "internal" in speaker
+            or "reasoning" in speaker
+            or text_lower.startswith("thought:")
+            or text_lower.startswith("internal:")
+            or text_lower.startswith("reasoning:")
+            or text_lower.startswith("[inner thought")
+            or text_lower.startswith("(inner thought")
+        ):
+            continue
+
+        visible.append(msg)
+
+    return visible
+
+
+def _visible_transcript_items():
+    visible = []
+
+    for msg in STATE["transcript"]:
+        speaker = str(msg.get("speaker", "")).strip().lower()
+        text = str(msg.get("text", "")).strip()
+        text_lower = text.lower()
+
+        if (
+            "thought" in speaker
+            or "internal" in speaker
+            or "reasoning" in speaker
+            or text_lower.startswith("thought:")
+            or text_lower.startswith("internal:")
+            or text_lower.startswith("reasoning:")
+            or text_lower.startswith("*inner thought")
+            or text_lower.startswith("[inner thought")
+            or text_lower.startswith("(inner thought")
+        ):
+            continue
+
+        visible.append(msg)
+
+    return visible
+
+
+def _transcript_text(limit=30):
+    lines = []
+
+    if STATE["scene"]:
+        lines.append(f"Focus: {STATE['scene']}")
+        lines.append("")
+
+    recent = _visible_transcript_items()[-limit:]
+    for msg in recent:
+        lines.append(f"{msg['speaker']}: {msg['text']}")
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
+
+def _format_transcript():
+    lines = []
+
+    if STATE["scene"]:
+        lines.append(f"Focus: {STATE['scene']}")
+        lines.append("")
+
+    for msg in _visible_transcript_items():
+        lines.append(f"{msg['speaker']}: {msg['text']}")
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
+""".strip()
+
+
+def _build_takeaway_prompt(user_name):
+    mode = STATE["persona_1"] or "be_heard"
+    style = STATE["persona_2"] or "gentle"
+    transcript = _transcript_text(limit=40)
+
+    return f"""
+You are Lantern, writing a brief closing takeaway for the user.
+
+Support mode: {_mode_label(mode)}
+Support style: {_style_label(style)}
+
+Transcript:
+{transcript}
+
+Write exactly three short lines and nothing else:
+
+What I'm hearing: ...
+What matters most right now: ...
+Next small step: ...
+
+Rules:
+- Be warm, grounded, and specific.
+- No bullets.
+- No extra intro or outro.\n- No therapy-speak.\n- No poetry.
+- Each line should be brief.
+""".strip()
+
+
+def _clean_generated_text(text):
+    text = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = text.split("\n")
+    kept = []
+    skipping_hidden = False
+
+    def is_hidden_start(s):
+        s = s.strip().lower()
+        return (
+            s.startswith("*inner thought")
+            or s.startswith("[inner thought")
+            or s.startswith("(inner thought")
+            or s.startswith("inner thought:")
+            or s.startswith("thought:")
+            or s.startswith("internal:")
+            or s.startswith("reasoning:")
+        )
+
+    for line in lines:
+        stripped = line.strip()
+
+        if skipping_hidden:
+            if not stripped:
+                skipping_hidden = False
+            continue
+
+        if is_hidden_start(stripped):
+            skipping_hidden = True
+            continue
+
+        kept.append(line)
+
+    cleaned = "\n".join(kept).strip()
+
+    while "\n\n\n" in cleaned:
+        cleaned = cleaned.replace("\n\n\n", "\n\n")
+
+    return cleaned
+
+
+def _append_opening():
+    mode = STATE["persona_1"] or "be_heard"
+    STATE["transcript"].append({
+        "speaker": "Lantern",
+        "text": _opening_line(mode, STATE["scene"])
+    })
+    STATE["turn_count"] += 1
+    STATE["next_speaker"] = "You"
+
+
+def _append_lantern_reply():
+    chat_name = STATE["chat_1"]
+    prompt = _build_reply_prompt(user_name="You")
+    reply = _chat_once(prompt, chat_name=chat_name)
+    reply = _strip_speaker_prefix(reply, "Lantern")
+    reply = _clean_generated_text(reply)
+
+    if not reply:
+        reply = "I'm here with you. Tell me what feels most important right now."
+
+    STATE["transcript"].append({
+        "speaker": "Lantern",
+        "text": reply
+    })
+    STATE["turn_count"] += 1
+    STATE["next_speaker"] = "You"
+
+
+def _append_takeaway():
+    chat_name = STATE["chat_1"]
+    prompt = _build_takeaway_prompt(user_name="You")
+    reply = _chat_once(prompt, chat_name=chat_name)
+    reply = _strip_speaker_prefix(reply, "Takeaway")
+    reply = _clean_generated_text(reply)
+
+    if not reply:
+        reply = (
+            "What I'm hearing: You're carrying uncertainty and want a calmer place to sort it out.\n"
+            "What matters most right now: Steadiness comes before clarity.\n"
+            "Next small step: Name the strongest feeling in one honest sentence."
+        )
+
+    STATE["transcript"].append({
+        "speaker": "Takeaway",
+        "text": reply
+    })
+
+
+def _reset_state():
+    STATE["active"] = False
+    STATE["persona_1"] = ""
+    STATE["persona_2"] = ""
+    STATE["scene"] = ""
+    STATE["messages_per_batch"] = 4
+    STATE["transcript"] = []
+    STATE["next_speaker"] = "Lantern"
+    STATE["turn_count"] = 0
+    STATE["chat_1"] = ""
+    STATE["chat_2"] = ""
+
+
+def _closeout_preserve_transcript():
+    chat_1 = STATE["chat_1"]
+    chat_2 = STATE["chat_2"]
+
+    if chat_1:
+        _delete_chat(chat_1)
+    if chat_2:
+        _delete_chat(chat_2)
+
+    STATE["active"] = False
+    STATE["next_speaker"] = "Lantern"
+    STATE["chat_1"] = ""
+    STATE["chat_2"] = ""
+
+
+def _cleanup():
+    chat_1 = STATE["chat_1"]
+    chat_2 = STATE["chat_2"]
+
+    if chat_1:
+        _delete_chat(chat_1)
+    if chat_2:
+        _delete_chat(chat_2)
+
+    _reset_state()
+
+
+def execute(function_name, arguments, config, plugin_settings=None):
+    if function_name != "lantern":
+        return f"Unknown function: {function_name}", False
+
+    plugin_settings = plugin_settings or {}
+
+    default_batch = _to_int(plugin_settings.get("RENDEZVOUS_DEFAULT_BATCH", 4), 4)
+    max_batch = _to_int(plugin_settings.get("RENDEZVOUS_MAX_BATCH", 8), 8)
+    _user_name = _clean_text(plugin_settings.get("RENDEZVOUS_USER_NAME", "You")) or "You"
+
+    try:
+        action = _clean_text(arguments.get("action", "")).lower()
+
+
+        if action == "start":
+            mode = _clean_text(arguments.get("persona_1", "")) or "be_heard"
+            style = _clean_text(arguments.get("persona_2", "")) or "gentle"
+            scene = _clean_text(arguments.get("scene", ""))
+            messages_per_batch = _to_int(arguments.get("messages_per_batch", default_batch), default_batch)
+            seed_transcript = arguments.get("seed_transcript", "")
+            resume = bool(arguments.get("resume"))
+
+            if messages_per_batch < 1:
+                messages_per_batch = 1
+            if messages_per_batch > max_batch:
+                messages_per_batch = max_batch
+
+            if STATE["active"]:
+                _cleanup()
+
+            chat_1 = f"lantern-{_slug(mode)}-{uuid.uuid4().hex[:6]}"
+            _create_chat(chat_1)
+
+            STATE["active"] = True
+            STATE["persona_1"] = mode
+            STATE["persona_2"] = style
+            STATE["scene"] = scene
+            STATE["messages_per_batch"] = messages_per_batch
+            STATE["transcript"] = []
+            STATE["next_speaker"] = "Lantern"
+            STATE["turn_count"] = 0
+            STATE["chat_1"] = chat_1
+            STATE["chat_2"] = ""
+
+            if resume and str(seed_transcript).strip():
+                STATE["transcript"] = _parse_seed_transcript(seed_transcript)
+                STATE["turn_count"] = len(STATE["transcript"])
+                STATE["next_speaker"] = "You"
+                return _format_transcript(), True
+
+            return _format_transcript(), True
+
+        if action == "continue":
+            if not STATE["active"]:
+                return "No active session", False
+
+            _append_lantern_reply()
+            return _format_transcript(), True
+
+        if action == "user_message":
+            if not STATE["active"]:
+                return "No active session", False
+
+            user_message = _clean_text(arguments.get("user_message", ""))
+            if not user_message:
+                return "user_message is required", False
+
+            STATE["transcript"].append({
+                "speaker": "You",
+                "text": user_message
+            })
+
+            _append_lantern_reply()
+            return _format_transcript(), True
+
+        if action == "end":
+            clear = bool(arguments.get("clear"))
+
+            if clear:
+                _cleanup()
+                return "", True
+
+            if STATE["active"]:
+                _append_takeaway()
+                _closeout_preserve_transcript()
+
+            return _format_transcript(), True
+
+        return "Unknown action", False
+
+    except Exception as e:
+        return f"Error: {e}", False

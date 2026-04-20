@@ -1,0 +1,42 @@
+# Lantern
+
+Lantern is a Sapphire plugin for reflection, clarity, calm, and next steps.
+
+## Features
+
+- Persona-to-persona conversation flow
+- Transcript handling
+- Archive/session support
+- Simple Sapphire plugin structure
+
+## Files
+
+- `plugin.json` — plugin manifest
+- `app/index.js` — frontend/app entry
+- `routes/app_api.py` — API routes
+- `routes/action.py` — action routes
+- `tools/lantern.py` — main plugin tool logic
+
+## Installation
+
+1. Copy the plugin into your Sapphire plugins directory.
+2. Restart Sapphire if needed.
+3. Enable the plugin from the Sapphire interface.
+
+## Notes
+
+This repository is intended for the public plugin code only.
+
+Excluded from the repository:
+
+- `data/`
+- `__pycache__/`
+- `*.pyc`
+
+## Development
+
+This plugin was prepared for GitHub publication and possible future plugin-store submission.
+
+## License
+
+Add your preferred license here.

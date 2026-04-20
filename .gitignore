@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+data/
+rendezvous_signing_key.pem
+
+# local backup files
+*.bak
+*.bak.*
+*.pre_*
+.DS_Store
