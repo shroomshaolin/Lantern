@@ -39,4 +39,4 @@ This plugin was prepared for GitHub publication and possible future plugin-store
 
 ## License
 
-Add your preferred license here.
+This project is licensed under the MIT License. See the LICENSE file for details.
