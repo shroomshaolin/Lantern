@@ -4,7 +4,7 @@ Lantern is a Sapphire plugin for calm, reflective conversation, polished transcr
 
 ## Screenshot
 
-screenshot.png
+
 
 ## Features
 
