@@ -1,6 +1,6 @@
 # Lantern
 
-Lantern is a Sapphire plugin for reflection, clarity, calm, and next steps.
+Lantern is a Sapphire plugin for calm, reflective conversation, polished transcript handling, and a quieter space for introspection.
 
 ## Features
 
