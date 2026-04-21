@@ -1289,3 +1289,77 @@
     boot();
   }
 })();
+
+/* LANTERN_ROUTE_BOUNCER_PATCH */
+(() => {
+  if (window.__LANTERN_ROUTE_BOUNCER_PATCH__) return;
+  window.__LANTERN_ROUTE_BOUNCER_PATCH__ = true;
+
+  function isLanternRoute() {
+    return (window.location.hash || "").startsWith("#apps/lantern");
+  }
+
+  function isLanternApiUrl(url) {
+    const u = String(url || "");
+    return u.includes("/api/plugin/lantern/");
+  }
+
+  const originalFetch = window.fetch;
+  if (typeof originalFetch === "function") {
+    window.fetch = function(input, init) {
+      try {
+        const url = String((input && input.url) || input || "");
+        if (isLanternApiUrl(url) && !isLanternRoute()) {
+          console.warn("[Lantern] Blocked API call outside Lantern route:", url);
+          return Promise.resolve(new Response(
+            JSON.stringify({ ok: false, error: "Lantern route inactive" }),
+            {
+              status: 409,
+              headers: { "Content-Type": "application/json" }
+            }
+          ));
+        }
+      } catch (e) {}
+      return originalFetch.apply(this, arguments);
+    };
+  }
+
+  const xhrOpen = XMLHttpRequest.prototype.open;
+  const xhrSend = XMLHttpRequest.prototype.send;
+
+  XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+    this.__lantern_url = url;
+    return xhrOpen.call(this, method, url, ...rest);
+  };
+
+  XMLHttpRequest.prototype.send = function(body) {
+    try {
+      if (isLanternApiUrl(this.__lantern_url) && !isLanternRoute()) {
+        console.warn("[Lantern] Blocked XHR outside Lantern route:", this.__lantern_url);
+        throw new Error("Lantern route inactive");
+      }
+    } catch (e) {
+      throw e;
+    }
+    return xhrSend.call(this, body);
+  };
+
+  document.addEventListener("click", (e) => {
+    if (isLanternRoute()) return;
+
+    const btn = e.target && e.target.closest ? e.target.closest("button") : null;
+    if (!btn) return;
+
+    const t = String(btn.textContent || "").trim().toLowerCase();
+    if (
+      t.includes("start lantern") ||
+      t.includes("share with lantern") ||
+      t === "resume" ||
+      t.includes("guide me further")
+    ) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      console.warn("[Lantern] Blocked leaked button action outside Lantern route:", t);
+    }
+  }, true);
+})();
