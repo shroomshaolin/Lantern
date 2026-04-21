@@ -432,6 +432,82 @@
 
     ensureLanternDisclaimer();
 
+
+    if (!window.__lanternDoorBouncerFix) {
+      window.__lanternDoorBouncerFix = true;
+      console.log("Lantern door bouncer live");
+
+      document.addEventListener("click", (e) => {
+        const copyBtn = e.target.closest("#rv-copy");
+        const exportBtn = e.target.closest("#rv-export");
+
+        if (!copyBtn && !exportBtn) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        const transcriptEl = document.querySelector("#rv-transcript");
+        const liveText = String(
+          ((transcriptEl && (transcriptEl.innerText || transcriptEl.textContent)) || "")
+        ).trim();
+
+        if (copyBtn) {
+          try {
+            if (!liveText) {
+              if (typeof setStatus === "function") setStatus("Nothing to copy.");
+              return;
+            }
+
+            const ta = document.createElement("textarea");
+            ta.value = liveText;
+            ta.setAttribute("readonly", "true");
+            ta.style.position = "fixed";
+            ta.style.left = "-9999px";
+            ta.style.top = "0";
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+
+            const ok = document.execCommand("copy");
+            ta.remove();
+
+            if (!ok) throw new Error("Copy failed.");
+            if (typeof setStatus === "function") setStatus("Reflection copied.");
+          } catch (err) {
+            if (typeof setStatus === "function") {
+              setStatus(String((err && err.message) || err || "Copy failed."));
+            }
+          }
+          return;
+        }
+
+        if (exportBtn) {
+          try {
+            if (!liveText) {
+              if (typeof setStatus === "function") setStatus("Nothing to download.");
+              return;
+            }
+
+            const blob = new Blob([liveText], { type: "text/plain;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "lantern_reflection.txt";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+            if (typeof setStatus === "function") setStatus("Downloaded TXT.");
+          } catch (err) {
+            if (typeof setStatus === "function") {
+              setStatus(String((err && err.message) || err || "Download failed."));
+            }
+          }
+        }
+      }, true);
+    }
+
     if (!window.__lanternEarlyCopyExportFix) {
       window.__lanternEarlyCopyExportFix = true;
       window.__lanternDocumentCopyExport = true;
@@ -1029,7 +1105,84 @@
       }
     }, true);
 
-    root.querySelector("#rv-archive")#rv-archive").addEventListener("click", async () => {
+    if (!window.__lanternDocumentCopyExport) {
+      window.__lanternDocumentCopyExport = true;
+
+      document.addEventListener("click", (e) => {
+        const copyBtn = e.target.closest("#rv-copy");
+        const exportBtn = e.target.closest("#rv-export");
+
+        if (!copyBtn && !exportBtn) {
+          return;
+        }
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        const transcriptEl = document.querySelector("#rv-transcript");
+        const liveText = String(
+          ((transcriptEl && (transcriptEl.innerText || transcriptEl.textContent)) ||
+            state.lastTranscript ||
+            "")
+        ).trim();
+
+        if (copyBtn) {
+          try {
+            if (!liveText) {
+              setStatus("Nothing to copy.");
+              return;
+            }
+
+            const ta = document.createElement("textarea");
+            ta.value = liveText;
+            ta.setAttribute("readonly", "true");
+            ta.style.position = "fixed";
+            ta.style.left = "-9999px";
+            ta.style.top = "0";
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+
+            const ok = document.execCommand("copy");
+            ta.remove();
+
+            if (!ok) {
+              throw new Error("Copy failed.");
+            }
+
+            setStatus("Reflection copied.");
+          } catch (err) {
+            setStatus(String((err && err.message) || err || "Copy failed."));
+          }
+          return;
+        }
+
+        if (exportBtn) {
+          try {
+            if (!liveText) {
+              setStatus("Nothing to download.");
+              return;
+            }
+
+            const blob = new Blob([liveText], { type: "text/plain;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `lantern_${timestampForFilename()}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+            setStatus("Downloaded TXT.");
+          } catch (err) {
+            setStatus(String((err && err.message) || err || "Download failed."));
+          }
+        }
+      }, true);
+    }
+
+    root.querySelector("#rv-archive").addEventListener("click", async () => {
       try {
         if (!state.lastTranscript.trim()) {
           setStatus("No saved reflections yet.");
