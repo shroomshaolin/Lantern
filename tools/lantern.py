@@ -355,32 +355,6 @@ def _visible_transcript_items():
     return visible
 
 
-def _visible_transcript_items():
-    visible = []
-
-    for msg in STATE["transcript"]:
-        speaker = str(msg.get("speaker", "")).strip().lower()
-        text = str(msg.get("text", "")).strip()
-        text_lower = text.lower()
-
-        if (
-            "thought" in speaker
-            or "internal" in speaker
-            or "reasoning" in speaker
-            or text_lower.startswith("thought:")
-            or text_lower.startswith("internal:")
-            or text_lower.startswith("reasoning:")
-            or text_lower.startswith("*inner thought")
-            or text_lower.startswith("[inner thought")
-            or text_lower.startswith("(inner thought")
-        ):
-            continue
-
-        visible.append(msg)
-
-    return visible
-
-
 def _transcript_text(limit=30):
     lines = []
 
@@ -409,6 +383,77 @@ def _format_transcript():
 
     return "\n".join(lines).strip()
 
+
+def _parse_seed_transcript(seed_text):
+    items = []
+    current = None
+
+    for raw in str(seed_text or "").splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+
+        if line.startswith("Focus:"):
+            continue
+
+        m = re.match(r"^([^:]{1,40}):\s*(.*)$", line)
+        if m:
+            speaker = m.group(1).strip()
+            body = m.group(2).strip()
+
+            if speaker.lower() == "donna":
+                speaker = "You"
+
+            if speaker in ("Lantern", "You", "Takeaway"):
+                current = {"speaker": speaker, "text": body}
+                items.append(current)
+                continue
+
+        if current:
+            current["text"] += "\n" + line.strip()
+
+    return items
+
+
+def _build_reply_prompt(user_name):
+    mode = STATE["persona_1"] or "be_heard"
+    style = STATE["persona_2"] or "gentle"
+    scene = STATE["scene"] or "The user wants support but has not described the issue yet."
+    transcript = _transcript_text()
+    pace = _pace_label(STATE["messages_per_batch"])
+
+    return f"""
+You are Lantern, a calm support guide for reflection, clarity, calm, and next steps.
+
+Core stance:
+- Warm, grounded, emotionally intelligent, and useful.
+- Do not diagnose.
+- Do not claim to be a licensed therapist or clinician.
+- Do not sound robotic, preachy, vague, airy, or theatrical.
+- Keep your feet on the ground.\n- Prefer simple, everyday language over metaphors.\n- Do not sound like a poem, sermon, or meditation app.
+- If the user seems to be in immediate danger, encourage urgent human help clearly and briefly.
+
+Support mode: {_mode_label(mode)}
+Support style: {_style_label(style)}
+Pace: {pace}
+
+Mode guidance:
+{_mode_instructions(mode)}
+
+Style guidance:
+{_style_instructions(style)}
+
+User focus:
+{scene}
+
+Session transcript so far:
+{transcript or "(No prior messages yet.)"}
+
+Write exactly one Lantern reply only.
+Do not write the speaker name.
+Do not write for the user.
+Keep it concise and grounded: 2 to 4 sentences.
+Ask at most one question.\nPrefer short, plain sentences.\nAvoid metaphors unless the user uses them first.
 """.strip()
 
 
@@ -440,46 +485,6 @@ Rules:
 """.strip()
 
 
-def _clean_generated_text(text):
-    text = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
-    lines = text.split("\n")
-    kept = []
-    skipping_hidden = False
-
-    def is_hidden_start(s):
-        s = s.strip().lower()
-        return (
-            s.startswith("*inner thought")
-            or s.startswith("[inner thought")
-            or s.startswith("(inner thought")
-            or s.startswith("inner thought:")
-            or s.startswith("thought:")
-            or s.startswith("internal:")
-            or s.startswith("reasoning:")
-        )
-
-    for line in lines:
-        stripped = line.strip()
-
-        if skipping_hidden:
-            if not stripped:
-                skipping_hidden = False
-            continue
-
-        if is_hidden_start(stripped):
-            skipping_hidden = True
-            continue
-
-        kept.append(line)
-
-    cleaned = "\n".join(kept).strip()
-
-    while "\n\n\n" in cleaned:
-        cleaned = cleaned.replace("\n\n\n", "\n\n")
-
-    return cleaned
-
-
 def _append_opening():
     mode = STATE["persona_1"] or "be_heard"
     STATE["transcript"].append({
@@ -495,7 +500,6 @@ def _append_lantern_reply():
     prompt = _build_reply_prompt(user_name="You")
     reply = _chat_once(prompt, chat_name=chat_name)
     reply = _strip_speaker_prefix(reply, "Lantern")
-    reply = _clean_generated_text(reply)
 
     if not reply:
         reply = "I'm here with you. Tell me what feels most important right now."
@@ -513,7 +517,6 @@ def _append_takeaway():
     prompt = _build_takeaway_prompt(user_name="You")
     reply = _chat_once(prompt, chat_name=chat_name)
     reply = _strip_speaker_prefix(reply, "Takeaway")
-    reply = _clean_generated_text(reply)
 
     if not reply:
         reply = (
