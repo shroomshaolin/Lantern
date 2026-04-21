@@ -33,7 +33,10 @@ def _load_tool_module_fresh():
 
 
 def _get_tool_module():
-    return _load_tool_module_fresh()
+    global _LANTERN_TOOL
+    if _LANTERN_TOOL is None:
+        _LANTERN_TOOL = _load_tool_module_fresh()
+    return _LANTERN_TOOL
 
 
 def _load_json(path):
