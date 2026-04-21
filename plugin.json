@@ -1,7 +1,7 @@
 {
   "name": "lantern",
   "display_name": "Lantern",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Support for reflection, clarity, calm, and next steps.",
   "author": "Donna",
   "capabilities": {

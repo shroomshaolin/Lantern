@@ -228,7 +228,7 @@ def _chat_once(prompt, chat_name):
     last_error = None
     for body in attempts:
         try:
-            result = _api("POST", "/api/chat", body)
+            result = _api("POST", "/api/chat", {**body, "isolated": True, "task_settings": {}})
             text = _extract_reply_text(result)
             if text:
                 return text
