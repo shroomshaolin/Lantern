@@ -1,7 +1,7 @@
 {
   "name": "lantern",
   "display_name": "Lantern",
-  "version": "0.6.0",
+  "version": "0.6.2",
   "description": "Support for reflection, clarity, calm, and next steps.",
   "author": "Donna",
   "capabilities": {
@@ -61,9 +61,9 @@
       }
     ],
     "app": {
-      "icon": "🏮"
+      "icon": "\ud83c\udfee"
     }
   },
   "short_name": "Lantern",
-  "icon": "🏮"
+  "icon": "\ud83c\udfee"
 }

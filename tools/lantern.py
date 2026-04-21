@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import re
 import uuid
 import random
@@ -101,18 +102,36 @@ def _slug(value):
 
 
 def _read_api_key():
+    env_candidates = [
+        os.getenv("SAPPHIRE_SECRET_KEY"),
+        os.getenv("SAPPHIRE_API_KEY"),
+    ]
+    for value in env_candidates:
+        value = (value or "").strip()
+        if value:
+            return value
+
     candidates = [
         Path("/home/sapphire/.config/sapphire/secret_key"),
+        Path("/root/.config/sapphire/secret_key"),
         Path.home() / ".config" / "sapphire" / "secret_key",
         Path.home() / "Library" / "Application Support" / "Sapphire" / "secret_key",
     ]
-    for path in candidates:
-        if path.exists():
-            text = path.read_text(encoding="utf-8").strip()
-            if text:
-                return text
-    raise RuntimeError("Could not find Sapphire secret_key")
 
+    tried = []
+    for path in candidates:
+        tried.append(str(path))
+        try:
+            if path.exists():
+                text = path.read_text(encoding="utf-8").strip()
+                if text:
+                    return text
+        except Exception:
+            pass
+
+    raise RuntimeError(
+        "Could not find Sapphire secret_key. Tried: " + ", ".join(tried)
+    )
 
 def _api(method, path, payload=None):
     headers = {"X-API-Key": _read_api_key()}
