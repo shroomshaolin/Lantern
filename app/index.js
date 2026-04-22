@@ -68,6 +68,7 @@
     history: [],
     lastTranscript: "",
     pendingDividerLabel: "",
+    loadedHistoryId: "",
     viewMode: "live"
   };
 
@@ -386,7 +387,6 @@
 
             <button id="rv-continue" style="width:100%; padding:12px; border-radius:10px; margin-bottom:10px; cursor:pointer; border:1px solid #7c3aed; background:rgba(76, 29, 149, .18); color:#e9d5ff; font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-weight:700;">Guide me further</button>
             <button id="rv-end" style="width:100%; padding:12px; border-radius:10px; margin-bottom:10px; cursor:pointer; border:1px solid #94a3b8; background:rgba(51, 65, 85, .22); color:#e2e8f0; font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-weight:700;">Close for now</button>
-            <button id="rv-clear" style="width:100%; padding:12px; border-radius:10px; margin-bottom:16px; cursor:pointer; border:1px solid #f59e0b; background:rgba(120, 53, 15, .20); color:#fde68a; font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-weight:700;">Resume</button>
             <button id="rv-finish" style="width:100%; padding:12px; border-radius:10px; margin-bottom:16px; cursor:pointer; border:1px solid #dc2626; background:rgba(127, 29, 29, .22); color:#fecaca; font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace; font-weight:700;">End</button>
 
             <label style="display:block; margin-bottom:12px;">
@@ -793,6 +793,7 @@
             });
 
             const entry = data.entry || {};
+            state.loadedHistoryId = entry.id || "";
             const turnsEach = root.querySelector("#rv-turns-each").value;
 
             if (entry.persona_1) p1.value = entry.persona_1;
@@ -958,9 +959,10 @@
           try {
             const saveData = await api("history/save", {
               method: "POST",
-              body: JSON.stringify({})
+              body: JSON.stringify({ id: state.loadedHistoryId || "" })
             });
             state.history = saveData.history || state.history || [];
+            state.loadedHistoryId = (saveData.saved && saveData.saved.id) || state.loadedHistoryId || "";
             renderHistoryList();
           } catch (saveErr) {
             console.warn("Save on pause failed", saveErr);
@@ -983,47 +985,25 @@
     });
 
 
-    root.querySelector("#rv-clear").addEventListener("click", async () => {
-      try {
-        if (!String(state.lastTranscript || "").trim()) {
-          setStatus("Nothing to resume.");
-          return;
-        }
-
-        state.viewMode = "live";
-        state.pendingDividerLabel = "";
-        userBox.value = "";
-
-        if (typeof setSessionUi === "function") {
-          setSessionUi(true, Boolean(String(state.lastTranscript || "").trim()));
-        }
-
-        setStatus("Ready");
-      } catch (err) {
-        setStatus("Resume failed");
-        setTranscript(String(err));
-      }
-    });
 
 
     root.querySelector("#rv-finish").addEventListener("click", async () => {
       try {
         setStatus("Ending...");
-        try {
-          await api("session/end", {
-            method: "POST",
-            body: JSON.stringify({ clear: true })
-          });
-        } catch (e) {}
+        const ended = await api("session/end", {
+          method: "POST",
+          body: JSON.stringify({})
+        });
 
+        const transcriptText = (ended && ended.transcript) || "";
         state.viewMode = "live";
-        state.lastTranscript = "";
+        state.lastTranscript = transcriptText;
         state.pendingDividerLabel = "";
         userBox.value = "";
-        setTranscript("");
+        setTranscript(transcriptText);
 
         if (typeof setSessionUi === "function") {
-          setSessionUi(false, false);
+          setSessionUi(false, Boolean(String(transcriptText).trim()));
         }
 
         setStatus("Session ended");

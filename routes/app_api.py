@@ -242,6 +242,8 @@ async def start_session(request=None, body=None, **kwargs):
     persona_1 = str(payload.get("persona_1", "")).strip()
     persona_2 = str(payload.get("persona_2", "")).strip()
     scene = str(payload.get("scene", "")).strip()
+    seed_transcript = str(payload.get("seed_transcript", "") or "")
+    resume = bool(payload.get("resume", False))
 
     turns_each = _to_int(payload.get("turns_each", 2), 2)
     if turns_each < 1:
@@ -257,6 +259,8 @@ async def start_session(request=None, body=None, **kwargs):
         "persona_2": persona_2,
         "scene": scene,
         "messages_per_batch": messages_per_batch,
+        "seed_transcript": seed_transcript,
+        "resume": resume,
     })
 
     if not ok:
@@ -336,12 +340,18 @@ async def get_history(request=None, body=None, **kwargs):
 async def save_history(request=None, body=None, **kwargs):
     payload = await _get_payload(body=body, request=request)
     label = str(payload.get("label", "")).strip()
+    entry_id = str(payload.get("id", "")).strip()
 
     entry = _current_session_archive(label=label)
     if not entry:
         return JSONResponse({"ok": False, "error": "Nothing to archive"}, status_code=400)
 
     entries = _load_history_entries()
+
+    if entry_id:
+        entry["id"] = entry_id
+        entries = [e for e in entries if e.get("id") != entry_id]
+
     entries.insert(0, entry)
     entries = entries[:100]
     _save_history_entries(entries)
