@@ -49,9 +49,12 @@ def _load_json(path):
         return {}
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
 def _merged_personas():
-    core = _load_json("/app/core/personas/personas.json")
-    user = _load_json("/app/user/personas/personas.json")
+    core = _load_json(PROJECT_ROOT / "core" / "personas" / "personas.json")
+    user = _load_json(PROJECT_ROOT / "user" / "personas" / "personas.json")
 
     if not isinstance(core, dict):
         core = {}

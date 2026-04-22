@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import sys
 import re
 import uuid
 import random
@@ -111,11 +112,23 @@ def _read_api_key():
         if value:
             return value
 
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA")
+        if base:
+            config_dir = Path(base) / "Sapphire"
+        else:
+            config_dir = Path.home() / "AppData" / "Roaming" / "Sapphire"
+    elif sys.platform == "darwin":
+        config_dir = Path.home() / "Library" / "Application Support" / "Sapphire"
+    else:
+        xdg_config = os.environ.get("XDG_CONFIG_HOME")
+        if xdg_config:
+            config_dir = Path(xdg_config) / "sapphire"
+        else:
+            config_dir = Path.home() / ".config" / "sapphire"
+
     candidates = [
-        Path("/home/sapphire/.config/sapphire/secret_key"),
-        Path("/root/.config/sapphire/secret_key"),
-        Path.home() / ".config" / "sapphire" / "secret_key",
-        Path.home() / "Library" / "Application Support" / "Sapphire" / "secret_key",
+        config_dir / "secret_key",
     ]
 
     tried = []
